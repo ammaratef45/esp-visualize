@@ -7,6 +7,11 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
+extern crate alloc;
+
+use core::ptr::addr_of_mut;
+
+use esp_alloc::{self as _, HeapRegion, MemoryCapability};
 use embedded_graphics::mono_font::ascii::FONT_4X6;
 use embedded_graphics::prelude::{Point, RgbColor};
 use embedded_graphics::text::{Alignment, Text};
@@ -15,13 +20,13 @@ use esp_hal::clock::CpuClock;
 use esp_hal::dma::DmaDescriptor;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::{Async, main};
-use esp_hal::peripherals::{Peripherals, TIMG0};
+use esp_hal::peripherals::{Peripherals, TIMG0, WIFI};
 use esp_hal::time::{Rate};
 use esp_hal::gpio::Pin;
 use esp_hub75::Color;
 use esp_hub75::{Hub75, Hub75Pins16, framebuffer::{compute_rows, compute_frame_count, plain::DmaFrameBuffer}};
 use embedded_graphics::mono_font::MonoTextStyleBuilder;
-use esp_radio::wifi::{WifiController, WifiDevice};
+use esp_radio::wifi::{self, WifiController, WifiDevice};
 
 const ROWS: usize = 32;
 const COLS: usize = 64;
@@ -31,11 +36,27 @@ const FRAME_COUNT: usize = compute_frame_count(BITS);
 const SSID: &str = env!("WIFI_SSID");
 const PASSWORD: &str = env!("WIFI_PASSWORD");
 
+static ALLOCATOR: esp_alloc::EspHeap = esp_alloc::EspHeap::empty();
+
 type FBType = DmaFrameBuffer<ROWS, COLS, NROWS, BITS, FRAME_COUNT>;
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
     loop {}
+}
+
+fn init_heap() {
+    use core::mem::MaybeUninit;
+    const HEAP_SIZE: usize = 72 * 1024;
+    static mut HEAP: MaybeUninit<[u8; HEAP_SIZE]> = MaybeUninit::uninit();
+
+    unsafe {
+        esp_alloc::HEAP.add_region(HeapRegion::new(
+            addr_of_mut!(HEAP) as *mut u8,
+            HEAP_SIZE,
+            MemoryCapability::Internal.into(),
+        ));
+    }
 }
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
@@ -50,28 +71,25 @@ esp_bootloader_esp_idf::esp_app_desc!();
 )]
 #[main]
 fn main() -> ! {
-    // generator version: 1.1.0
-
+    init_heap();
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
     let (_, tx_descriptors) = esp_hal::dma_descriptors!(0, FBType::dma_buffer_size_bytes());
 
-    let (hub75, timg0) = peripherals_extraction(peripherals, tx_descriptors);
+    let (hub75, timg0, wifi_peripheral) = peripherals_extraction(peripherals, tx_descriptors);
 
     let mut matrix_display = WaveShare64X32Display::new(hub75);
 
     esp_rtos::start(timg0.timer0);
-    init_wifi();
+    init_wifi(wifi_peripheral);
 
     loop {
         matrix_display = matrix_display.draw("Hi Again!");
     }
-
-    // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v~1.0/examples
 }
 
 fn peripherals_extraction<'a>(peripherals: Peripherals, tx_descriptors: &'static mut [DmaDescriptor]) -> 
-(Hub75<'a, Async>, TimerGroup<'a, TIMG0<'a>>) {
+(Hub75<'a, Async>, TimerGroup<'a, TIMG0<'a>>, WIFI<'static>) {
     // https://learn.adafruit.com/adafruit-matrixportal-s3/pinouts
     let hub75_pins = Hub75Pins16 {
         red1: peripherals.GPIO42.degrade(),
@@ -98,11 +116,13 @@ fn peripherals_extraction<'a>(peripherals: Peripherals, tx_descriptors: &'static
         Rate::from_mhz(20),
     ).expect("failed to create Hub75!");
 
+    // esp-radio stuff
     // esp-rtos (otherwise esp-radio will yell at you "`esp-radio` has no scheduler enabled.")
     let timg0 = TimerGroup::new(peripherals.TIMG0);
+    let wifi_peripheral = peripherals.WIFI;
 
     // Returns
-    (hub75, timg0)
+    (hub75, timg0, wifi_peripheral)
 }
 
 // https://www.waveshare.com/rgb-matrix-p2.5-64x32.htm
@@ -141,6 +161,9 @@ impl<'a> WaveShare64X32Display<'a> {
     }
 }
 
-fn init_wifi() {//-> (WifiController<'static>, WifiDevice<'static>) {
+fn init_wifi(wifi_peripheral: WIFI<'static>) {//-> (WifiController<'static>, WifiDevice<'static>) {
   let radio = esp_radio::init().expect("Failed to init radio");
+  let (mut wifi_controller, interfaces) =
+    wifi::new(&radio, wifi_peripheral, Default::default())
+        .expect("Failed to init Wi‑Fi");
 }

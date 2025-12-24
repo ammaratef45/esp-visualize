@@ -1002,6 +1002,7 @@ version = "0.1.0"
 dependencies = [
  "critical-section",
  "embedded-graphics",
+ "esp-alloc",
  "esp-bootloader-esp-idf",
  "esp-hal",
  "esp-hub75",
