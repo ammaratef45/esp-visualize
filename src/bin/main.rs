@@ -26,7 +26,7 @@ use esp_hal::gpio::Pin;
 use esp_hub75::Color;
 use esp_hub75::{Hub75, Hub75Pins16, framebuffer::{compute_rows, compute_frame_count, plain::DmaFrameBuffer}};
 use embedded_graphics::mono_font::MonoTextStyleBuilder;
-use esp_radio::wifi::{self, WifiController, WifiDevice};
+use esp_radio::wifi::{self, ClientConfig, ModeConfig, WifiController, WifiDevice};
 
 const ROWS: usize = 32;
 const COLS: usize = 64;
@@ -35,8 +35,6 @@ const NROWS: usize = compute_rows(ROWS);
 const FRAME_COUNT: usize = compute_frame_count(BITS);
 const SSID: &str = env!("WIFI_SSID");
 const PASSWORD: &str = env!("WIFI_PASSWORD");
-
-static ALLOCATOR: esp_alloc::EspHeap = esp_alloc::EspHeap::empty();
 
 type FBType = DmaFrameBuffer<ROWS, COLS, NROWS, BITS, FRAME_COUNT>;
 
@@ -81,7 +79,8 @@ fn main() -> ! {
     let mut matrix_display = WaveShare64X32Display::new(hub75);
 
     esp_rtos::start(timg0.timer0);
-    init_wifi(wifi_peripheral);
+    let radio = esp_radio::init().expect("Failed to init radio");
+    init_wifi(wifi_peripheral, &radio);
 
     loop {
         matrix_display = matrix_display.draw("Hi Again!");
@@ -161,9 +160,28 @@ impl<'a> WaveShare64X32Display<'a> {
     }
 }
 
-fn init_wifi(wifi_peripheral: WIFI<'static>) {//-> (WifiController<'static>, WifiDevice<'static>) {
-  let radio = esp_radio::init().expect("Failed to init radio");
-  let (mut wifi_controller, interfaces) =
-    wifi::new(&radio, wifi_peripheral, Default::default())
-        .expect("Failed to init Wi‑Fi");
+fn init_wifi<'a>(wifi_peripheral: WIFI<'static>, radio: &'a esp_radio::Controller) -> (WifiController<'a>, WifiDevice<'a>) {
+    let (mut wifi_controller, interfaces) =
+        wifi::new(&radio, wifi_peripheral, Default::default())
+            .expect("Failed to init Wi-Fi");
+    let device = interfaces.sta;
+    wifi_controller
+        .set_power_saving(wifi::PowerSaveMode::None)
+        .unwrap();
+    let client_cfg = ModeConfig::Client(
+        ClientConfig::default()
+            .with_ssid(SSID.into())
+            .with_password(PASSWORD.into()),
+    );
+    wifi_controller.set_config(&client_cfg).unwrap();
+    wifi_controller.start().unwrap();
+    wifi_controller.connect().unwrap();
+    loop {
+        match wifi_controller.is_connected() {
+            Ok(true) => break,
+            Ok(false) => {}
+            Err(e) => panic!("Wi-Fi error: {:?}", e),
+        }
+    }
+    (wifi_controller, device)
 }
