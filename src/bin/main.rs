@@ -13,13 +13,15 @@ use embedded_graphics::text::{Alignment, Text};
 use embedded_graphics::Drawable;
 use esp_hal::clock::CpuClock;
 use esp_hal::dma::DmaDescriptor;
+use esp_hal::timer::timg::TimerGroup;
 use esp_hal::{Async, main};
-use esp_hal::peripherals::Peripherals;
+use esp_hal::peripherals::{Peripherals, TIMG0};
 use esp_hal::time::{Rate};
 use esp_hal::gpio::Pin;
 use esp_hub75::Color;
 use esp_hub75::{Hub75, Hub75Pins16, framebuffer::{compute_rows, compute_frame_count, plain::DmaFrameBuffer}};
 use embedded_graphics::mono_font::MonoTextStyleBuilder;
+use esp_radio::wifi::{WifiController, WifiDevice};
 
 const ROWS: usize = 32;
 const COLS: usize = 64;
@@ -54,9 +56,12 @@ fn main() -> ! {
     let peripherals = esp_hal::init(config);
     let (_, tx_descriptors) = esp_hal::dma_descriptors!(0, FBType::dma_buffer_size_bytes());
 
-    let hub75 = peripherals_extraction(peripherals, tx_descriptors);
+    let (hub75, timg0) = peripherals_extraction(peripherals, tx_descriptors);
 
     let mut matrix_display = WaveShare64X32Display::new(hub75);
+
+    esp_rtos::start(timg0.timer0);
+    init_wifi();
 
     loop {
         matrix_display = matrix_display.draw("Hi Again!");
@@ -65,7 +70,8 @@ fn main() -> ! {
     // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v~1.0/examples
 }
 
-fn peripherals_extraction<'a>(peripherals: Peripherals, tx_descriptors: &'static mut [DmaDescriptor]) -> Hub75<'a, Async> {
+fn peripherals_extraction<'a>(peripherals: Peripherals, tx_descriptors: &'static mut [DmaDescriptor]) -> 
+(Hub75<'a, Async>, TimerGroup<'a, TIMG0<'a>>) {
     // https://learn.adafruit.com/adafruit-matrixportal-s3/pinouts
     let hub75_pins = Hub75Pins16 {
         red1: peripherals.GPIO42.degrade(),
@@ -91,7 +97,12 @@ fn peripherals_extraction<'a>(peripherals: Peripherals, tx_descriptors: &'static
         tx_descriptors,
         Rate::from_mhz(20),
     ).expect("failed to create Hub75!");
-    hub75
+
+    // esp-rtos (otherwise esp-radio will yell at you "`esp-radio` has no scheduler enabled.")
+    let timg0 = TimerGroup::new(peripherals.TIMG0);
+
+    // Returns
+    (hub75, timg0)
 }
 
 // https://www.waveshare.com/rgb-matrix-p2.5-64x32.htm
@@ -128,4 +139,8 @@ impl<'a> WaveShare64X32Display<'a> {
         result.expect("transfer failed");
         self
     }
+}
+
+fn init_wifi() {//-> (WifiController<'static>, WifiDevice<'static>) {
+  let radio = esp_radio::init().expect("Failed to init radio");
 }

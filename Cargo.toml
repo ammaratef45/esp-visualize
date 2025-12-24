@@ -18,6 +18,8 @@ critical-section = "1.2.0"
 esp-println = { version = "0.16.1", features = ["esp32s3"] }
 esp-hub75 = { version = "0.8.0", features = ["esp32s3"] }
 embedded-graphics = "0.8.1"
+esp-radio = { version = "0.17.0", features = ["esp32s3", "wifi"] }
+esp-rtos = { version = "0.2.0", features = ["esp32s3", "esp-radio"] }
 
 
 [profile.dev]
