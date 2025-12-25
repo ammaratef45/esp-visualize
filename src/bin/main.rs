@@ -196,6 +196,25 @@ fn connect_wifi(controller: &mut WifiController<'_>) {
     println!("Connected: {:?}", controller.is_connected());
 }
 
+pub fn create_interface(device: &mut esp_radio::wifi::WifiDevice) -> smoltcp::iface::Interface {
+    smoltcp::iface::Interface::new(
+        smoltcp::iface::Config::new(smoltcp::wire::HardwareAddress::Ethernet(
+            smoltcp::wire::EthernetAddress::from_bytes(&device.mac_address()),
+        )),
+        device,
+        timestamp(),
+    )
+}
+
+// some smoltcp boilerplate
+fn timestamp() -> smoltcp::time::Instant {
+    smoltcp::time::Instant::from_micros(
+        esp_hal::time::Instant::now()
+            .duration_since_epoch()
+            .as_micros() as i64,
+    )
+}
+
 fn make_stack (mut device: WifiDevice) -> (Interface, SocketSet<'static>) {
     let ipaddr = IpAddress::v4(192, 168, 1, 112);
     let ethernet_address = EthernetAddress(device.mac_address());
@@ -203,8 +222,7 @@ fn make_stack (mut device: WifiDevice) -> (Interface, SocketSet<'static>) {
     let mut config = iface::Config::new(hardware_address);
     config.random_seed = 0xDEADBEEF;
 
-    let now = Instant::ZERO;
-    let mut iface = Interface::new(config, &mut device, now);
+    let mut iface = create_interface(&mut device);
     iface.update_ip_addrs(|addr| {
         let _ = addr.push(IpCidr::new(ipaddr, 24));
     });
