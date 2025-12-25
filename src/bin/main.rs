@@ -27,6 +27,9 @@ use esp_hub75::Color;
 use esp_hub75::{Hub75, Hub75Pins16, framebuffer::{compute_rows, compute_frame_count, plain::DmaFrameBuffer}};
 use embedded_graphics::mono_font::MonoTextStyleBuilder;
 use esp_radio::wifi::{self, ClientConfig, ModeConfig, WifiController, WifiDevice};
+use smoltcp::iface::{self, Interface, SocketSet, SocketStorage};
+use smoltcp::time::Instant;
+use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr};
 
 const ROWS: usize = 32;
 const COLS: usize = 64;
@@ -60,8 +63,6 @@ fn init_heap() {
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
-// TODO: do I need heap allocator? and why?
-// https://github.com/Nereuxofficial/nostd-wifi-lamp/blob/main/src/main.rs
 
 #[allow(
     clippy::large_stack_frames,
@@ -80,7 +81,8 @@ fn main() -> ! {
 
     esp_rtos::start(timg0.timer0);
     let radio = esp_radio::init().expect("Failed to init radio");
-    init_wifi(wifi_peripheral, &radio);
+    let (_controller, device) = init_wifi(wifi_peripheral, &radio);
+    let (mut _iface, _sockets) = make_stack(device);
 
     loop {
         matrix_display = matrix_display.draw("Hi Again!");
@@ -184,4 +186,21 @@ fn init_wifi<'a>(wifi_peripheral: WIFI<'static>, radio: &'a esp_radio::Controlle
         }
     }
     (wifi_controller, device)
+}
+
+fn make_stack (mut device: WifiDevice) -> (Interface, SocketSet<'static>) {
+    let ipaddr = IpAddress::v4(192, 168, 1, 112);
+    let ethernet_address = EthernetAddress(device.mac_address());
+    let hardware_address = HardwareAddress::Ethernet(ethernet_address);
+    let mut config = iface::Config::new(hardware_address);
+    config.random_seed = 0xDEADBEEF;
+
+    let now = Instant::ZERO;
+    let mut iface = Interface::new(config, &mut device, now);
+    iface.update_ip_addrs(|addr| {
+        let _ = addr.push(IpCidr::new(ipaddr, 24));
+    });
+    static mut SOCKET_STORAGE: [SocketStorage; 4] = [SocketStorage::EMPTY; 4];
+    let sockets = unsafe { SocketSet::new(&mut SOCKET_STORAGE[..]) };
+    (iface, sockets)
 }
