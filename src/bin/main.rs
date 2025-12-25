@@ -19,7 +19,7 @@ use embedded_graphics::Drawable;
 use esp_hal::clock::CpuClock;
 use esp_hal::dma::DmaDescriptor;
 use esp_hal::timer::timg::TimerGroup;
-use esp_hal::{Async, main};
+use esp_hal::{Async, main, peripherals};
 use esp_hal::peripherals::{Peripherals, TIMG0, WIFI};
 use esp_hal::time::{Rate};
 use esp_hal::gpio::Pin;
@@ -46,20 +46,6 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
-fn init_heap() {
-    use core::mem::MaybeUninit;
-    const HEAP_SIZE: usize = 72 * 1024;
-    static mut HEAP: MaybeUninit<[u8; HEAP_SIZE]> = MaybeUninit::uninit();
-
-    unsafe {
-        esp_alloc::HEAP.add_region(HeapRegion::new(
-            addr_of_mut!(HEAP) as *mut u8,
-            HEAP_SIZE,
-            MemoryCapability::Internal.into(),
-        ));
-    }
-}
-
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -70,9 +56,7 @@ esp_bootloader_esp_idf::esp_app_desc!();
 )]
 #[main]
 fn main() -> ! {
-    init_heap();
-    let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
-    let peripherals = esp_hal::init(config);
+    let peripherals = init_hardware();
     let (_, tx_descriptors) = esp_hal::dma_descriptors!(0, FBType::dma_buffer_size_bytes());
 
     let (hub75, timg0, wifi_peripheral) = peripherals_extraction(peripherals, tx_descriptors);
@@ -87,6 +71,13 @@ fn main() -> ! {
     loop {
         matrix_display = matrix_display.draw("Hi Again!");
     }
+}
+
+fn init_hardware() -> Peripherals {
+    let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
+    let peripherals = esp_hal::init(config);
+    esp_alloc::heap_allocator!(size: 72 * 1024);
+    peripherals
 }
 
 fn peripherals_extraction<'a>(peripherals: Peripherals, tx_descriptors: &'static mut [DmaDescriptor]) -> 
