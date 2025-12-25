@@ -9,6 +9,7 @@
 
 extern crate alloc;
 
+use blocking_network_stack::Stack;
 use esp_alloc::{self as _};
 use embedded_graphics::mono_font::ascii::FONT_4X6;
 use embedded_graphics::prelude::{Point, RgbColor};
@@ -16,18 +17,17 @@ use embedded_graphics::text::{Alignment, Text};
 use embedded_graphics::Drawable;
 use esp_hal::clock::CpuClock;
 use esp_hal::dma::DmaDescriptor;
+use esp_hal::rng::Rng;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::{Async, main};
 use esp_hal::peripherals::{Peripherals, TIMG0, WIFI};
-use esp_hal::time::{Rate};
+use esp_hal::time::{Instant, Rate};
 use esp_hal::gpio::Pin;
 use esp_hub75::Color;
 use esp_hub75::{Hub75, Hub75Pins16, framebuffer::{compute_rows, compute_frame_count, plain::DmaFrameBuffer}};
 use embedded_graphics::mono_font::MonoTextStyleBuilder;
 use esp_radio::wifi::{self, ClientConfig, ModeConfig, ScanConfig, WifiController, WifiDevice};
-use smoltcp::iface::{self, Interface, SocketSet, SocketStorage};
-use smoltcp::time::Instant;
-use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr};
+use smoltcp::iface::{SocketSet, SocketStorage};
 use esp_println::println;
 
 const ROWS: usize = 32;
@@ -67,7 +67,9 @@ fn main() -> ! {
     let (mut controller, device) = init_wifi(wifi_peripheral, &radio);
     scan_wifi(&mut controller);
     connect_wifi(&mut controller);
-    let (mut _iface, _sockets) = make_stack(device);
+    let mut socket_set_entries: [SocketStorage; 4] = Default::default();
+    let mut stack = make_stack(device, &mut socket_set_entries);
+    obtain_ip(&mut stack);
 
     loop {
         matrix_display = matrix_display.draw("Hi Again!");
@@ -215,18 +217,32 @@ fn timestamp() -> smoltcp::time::Instant {
     )
 }
 
-fn make_stack (mut device: WifiDevice) -> (Interface, SocketSet<'static>) {
-    let ipaddr = IpAddress::v4(192, 168, 1, 112);
-    let ethernet_address = EthernetAddress(device.mac_address());
-    let hardware_address = HardwareAddress::Ethernet(ethernet_address);
-    let mut config = iface::Config::new(hardware_address);
-    config.random_seed = 0xDEADBEEF;
+fn obtain_ip(stack: &mut Stack<esp_radio::wifi::WifiDevice<'_>>) {
+    println!("Wait for IP address");
+    loop {
+        stack.work();
+        if stack.is_iface_up() {
+            println!("IP acquired: {:?}", stack.get_ip_info());
+            break;
+        }
+    }
+}
 
-    let mut iface = create_interface(&mut device);
-    iface.update_ip_addrs(|addr| {
-        let _ = addr.push(IpCidr::new(ipaddr, 24));
-    });
-    static mut SOCKET_STORAGE: [SocketStorage; 4] = [SocketStorage::EMPTY; 4];
-    let sockets = unsafe { SocketSet::new(&mut SOCKET_STORAGE[..]) };
-    (iface, sockets)
+fn make_stack<'a>(
+    mut device: WifiDevice<'a>,
+    socket_set_entries: &'a mut [SocketStorage<'a>; 4]
+) -> Stack<'a, WifiDevice<'a>> {
+    let iface = create_interface(&mut device);
+    let mut socket_set = SocketSet::new( &mut socket_set_entries[..]);
+    let dhcp_socket = smoltcp::socket::dhcpv4::Socket::new();
+    socket_set.add(dhcp_socket);
+    let now_fn = || Instant::now().duration_since_epoch().as_millis();
+
+    Stack::new(
+        iface,
+        device,
+        socket_set,
+        now_fn,
+        Rng::new().random()
+    )
 }

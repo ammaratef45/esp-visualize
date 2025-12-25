@@ -22,6 +22,10 @@ esp-radio = { version = "0.17.0", features = ["esp32s3", "wifi", "unstable", "sm
 esp-rtos = { version = "0.2.0", features = ["esp32s3", "esp-radio"] }
 esp-alloc = "0.9.0"
 smoltcp = { version = "0.12.0", default-features = false, features = ["proto-ipv4", "socket-tcp", "medium-ethernet"] }
+blocking-network-stack = { git = "https://github.com/bjoernQ/blocking-network-stack.git", rev = "b3ecefc222d8806edd221f266999ca339c52d34e", default-features = false, features = [
+  "dhcpv4",
+  "tcp",
+] }
 
 
 [profile.dev]
