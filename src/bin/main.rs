@@ -64,8 +64,9 @@ fn main() -> ! {
 
     esp_rtos::start(timg0.timer0);
     let radio = esp_radio::init().expect("Failed to init radio");
-    let (mut _controller, device) = init_wifi(wifi_peripheral, &radio);
-    scan_wifi(&mut _controller);
+    let (mut controller, device) = init_wifi(wifi_peripheral, &radio);
+    scan_wifi(&mut controller);
+    connect_wifi(&mut controller);
     let (mut _iface, _sockets) = make_stack(device);
 
     loop {
@@ -168,14 +169,6 @@ fn init_wifi<'a>(wifi_peripheral: WIFI<'static>, radio: &'a esp_radio::Controlle
     );
     wifi_controller.set_config(&client_cfg).unwrap();
     wifi_controller.start().unwrap();
-    wifi_controller.connect().unwrap();
-    loop {
-        match wifi_controller.is_connected() {
-            Ok(true) => break,
-            Ok(false) => {}
-            Err(e) => panic!("Wi-Fi error: {:?}", e),
-        }
-    }
     (wifi_controller, device)
 }
 
@@ -186,6 +179,21 @@ fn scan_wifi(controller: &mut WifiController<'_>) {
     for ap in res {
         println!("{:?}", ap);
     }
+}
+
+fn connect_wifi(controller: &mut WifiController<'_>) {
+    println!("{:?}", controller.capabilities());
+    println!("wifi_connect {:?}", controller.connect());
+
+    println!("Wait to get connected");
+    loop {
+        match controller.is_connected() {
+            Ok(true) => break,
+            Ok(false) => {}
+            Err(err) => panic!("{:?}", err),
+        }
+    }
+    println!("Connected: {:?}", controller.is_connected());
 }
 
 fn make_stack (mut device: WifiDevice) -> (Interface, SocketSet<'static>) {

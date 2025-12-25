@@ -21,3 +21,4 @@ Also pondering how much to allocate to the heap? I see from the macro docs that 
 ## Improvements
 
 - Use BLE (or some other way) to change configurations like wifi SSID and password.
+- Add a PCB design to the setup (consider https://www.kicad.org/)
