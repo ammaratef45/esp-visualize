@@ -9,9 +9,7 @@
 
 extern crate alloc;
 
-use core::ptr::addr_of_mut;
-
-use esp_alloc::{self as _, HeapRegion, MemoryCapability};
+use esp_alloc::{self as _};
 use embedded_graphics::mono_font::ascii::FONT_4X6;
 use embedded_graphics::prelude::{Point, RgbColor};
 use embedded_graphics::text::{Alignment, Text};
@@ -19,17 +17,18 @@ use embedded_graphics::Drawable;
 use esp_hal::clock::CpuClock;
 use esp_hal::dma::DmaDescriptor;
 use esp_hal::timer::timg::TimerGroup;
-use esp_hal::{Async, main, peripherals};
+use esp_hal::{Async, main};
 use esp_hal::peripherals::{Peripherals, TIMG0, WIFI};
 use esp_hal::time::{Rate};
 use esp_hal::gpio::Pin;
 use esp_hub75::Color;
 use esp_hub75::{Hub75, Hub75Pins16, framebuffer::{compute_rows, compute_frame_count, plain::DmaFrameBuffer}};
 use embedded_graphics::mono_font::MonoTextStyleBuilder;
-use esp_radio::wifi::{self, ClientConfig, ModeConfig, WifiController, WifiDevice};
+use esp_radio::wifi::{self, ClientConfig, ModeConfig, ScanConfig, WifiController, WifiDevice};
 use smoltcp::iface::{self, Interface, SocketSet, SocketStorage};
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr};
+use esp_println::println;
 
 const ROWS: usize = 32;
 const COLS: usize = 64;
@@ -65,7 +64,8 @@ fn main() -> ! {
 
     esp_rtos::start(timg0.timer0);
     let radio = esp_radio::init().expect("Failed to init radio");
-    let (_controller, device) = init_wifi(wifi_peripheral, &radio);
+    let (mut _controller, device) = init_wifi(wifi_peripheral, &radio);
+    scan_wifi(&mut _controller);
     let (mut _iface, _sockets) = make_stack(device);
 
     loop {
@@ -177,6 +177,15 @@ fn init_wifi<'a>(wifi_peripheral: WIFI<'static>, radio: &'a esp_radio::Controlle
         }
     }
     (wifi_controller, device)
+}
+
+fn scan_wifi(controller: &mut WifiController<'_>) {
+    println!("Start Wifi Scan");
+    let scan_config = ScanConfig::default().with_max(10);
+    let res = controller.scan_with_config(scan_config).unwrap();
+    for ap in res {
+        println!("{:?}", ap);
+    }
 }
 
 fn make_stack (mut device: WifiDevice) -> (Interface, SocketSet<'static>) {

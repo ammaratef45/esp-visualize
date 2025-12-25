@@ -17,3 +17,7 @@ Feel free to watch, hangout, or come help/educate!
 My guess is that we need to do heap allocation because we don't have an OS that can do heap allocation here, I'm not sure though.
 
 Also pondering how much to allocate to the heap? I see from the macro docs that if I pass an attribute `#[ram(reclaimed)]` then the heap will be allocated in a memory region that would otherwise go unused (reclaiming it from the bootloader), why isn't that the default? that sounds like free memory!
+
+## Improvements
+
+- Use BLE (or some other way) to change configurations like wifi SSID and password.
