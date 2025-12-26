@@ -10,7 +10,6 @@
 
 extern crate alloc;
 
-use blocking_network_stack::Stack;
 use esp_alloc::{self as _};
 use embedded_graphics::mono_font::ascii::FONT_4X6;
 use embedded_graphics::prelude::{Point, RgbColor};
@@ -21,18 +20,19 @@ use esp_hal::delay::Delay;
 use esp_hal::dma::DmaDescriptor;
 use esp_hal::rng::Rng;
 use esp_hal::timer::timg::TimerGroup;
-use esp_hal::{Async, main};
+use esp_hal::Async;
 use esp_hal::peripherals::{Peripherals, TIMG0, WIFI};
 use esp_hal::time::{Duration, Instant, Rate};
 use esp_hal::gpio::Pin;
 use esp_hub75::Color;
 use esp_hub75::{Hub75, Hub75Pins16, framebuffer::{compute_rows, compute_frame_count, plain::DmaFrameBuffer}};
 use embedded_graphics::mono_font::MonoTextStyleBuilder;
-use esp_radio::wifi::{self, ClientConfig, ModeConfig, ScanConfig, WifiController, WifiDevice};
-use smoltcp::iface::{SocketSet, SocketStorage};
+use esp_radio::wifi::{self, ClientConfig, ModeConfig, ScanConfig, WifiController, WifiDevice, WifiEvent, WifiStaState};
 use esp_println::println;
 use smoltcp::wire::IpAddress;
 use embedded_io::{Read, Write};
+use embassy_net::{DhcpConfig, Runner, StackResources};
+use embassy_executor::Spawner;
 
 const ROWS: usize = 32;
 const COLS: usize = 64;
@@ -68,13 +68,12 @@ macro_rules! mk_static {
 }
 
 
-#[main]
-fn main() -> ! {
+#[esp_rtos::main]
+async fn main(spawner: Spawner) -> ! {
     let peripherals = init_hardware();
     let (_, tx_descriptors) = esp_hal::dma_descriptors!(0, FBType::dma_buffer_size_bytes());
 
     let (hub75, timg0, wifi_peripheral) = peripherals_extraction(peripherals, tx_descriptors);
-
     let mut matrix_display = WaveShare64X32Display::new(hub75);
 
     esp_rtos::start(timg0.timer0);
@@ -82,16 +81,17 @@ fn main() -> ! {
         esp_radio::Controller<'static>,
         esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller")
     );
-    let (mut controller, device) = init_wifi(wifi_peripheral, &radio);
-    scan_wifi(&mut controller);
-    connect_wifi(&mut controller);
-    let mut socket_set_entries: [SocketStorage; 4] = Default::default();
-    let mut stack = make_stack(device, &mut socket_set_entries);
-    obtain_ip(&mut stack);
-    let mut rx_buffer = [0u8; 1536];
-    let mut tx_buffer = [0u8; 1536];
-    let socket = stack.get_socket(&mut rx_buffer, &mut tx_buffer);
-    http_request(socket);
+    let (controller, device) = init_wifi(wifi_peripheral, &radio);
+    let (stack, runner) = make_stack(device);
+
+    spawner.spawn(connection(controller)).ok();
+    spawner.spawn(net_task(runner)).ok();
+
+    wait_for_connection(stack).await;
+    // let mut rx_buffer = [0u8; 1536];
+    // let mut tx_buffer = [0u8; 1536];
+    // let socket = stack.get_socket(&mut rx_buffer, &mut tx_buffer);
+    // http_request(socket);
 
     loop {
         matrix_display = matrix_display.draw("Hi Again!");
@@ -196,76 +196,89 @@ fn init_wifi<'a>(wifi_peripheral: WIFI<'static>, radio: &'a esp_radio::Controlle
     (wifi_controller, device)
 }
 
-fn scan_wifi(controller: &mut WifiController<'_>) {
-    println!("Start Wifi Scan");
-    let scan_config = ScanConfig::default().with_max(10);
-    let res = controller.scan_with_config(scan_config).unwrap();
-    for ap in res {
-        println!("{:?}", ap);
-    }
-}
-
-fn connect_wifi(controller: &mut WifiController<'_>) {
-    println!("{:?}", controller.capabilities());
-    println!("wifi_connect {:?}", controller.connect());
-
-    println!("Wait to get connected");
+#[embassy_executor::task]
+async fn connection(mut controller: WifiController<'static>) {
+    println!("start connection task");
+    println!("Device capabilities: {:?}", controller.capabilities());
     loop {
-        match controller.is_connected() {
-            Ok(true) => break,
-            Ok(false) => {}
-            Err(err) => panic!("{:?}", err),
+        match esp_radio::wifi::sta_state() {
+            WifiStaState::Connected => {
+                // wait until we're no longer connected
+                controller.wait_for_event(WifiEvent::StaDisconnected).await;
+                embassy_time::Timer::after(embassy_time::Duration::from_millis(5000)).await
+            }
+            _ => {}
+        }
+        if !matches!(controller.is_started(), Ok(true)) {
+            let client_config = ModeConfig::Client(
+                ClientConfig::default()
+                    .with_ssid(SSID.into())
+                    .with_password(PASSWORD.into()),
+            );
+            controller.set_config(&client_config).unwrap();
+            println!("Starting wifi");
+            controller.start_async().await.unwrap();
+            println!("Wifi started!");
+
+            println!("Scan");
+            let scan_config = ScanConfig::default().with_max(10);
+            let result = controller
+                .scan_with_config_async(scan_config)
+                .await
+                .unwrap();
+            for ap in result {
+                println!("{:?}", ap);
+            }
+        }
+        println!("About to connect...");
+
+        match controller.connect_async().await {
+            Ok(_) => println!("Wifi connected!"),
+            Err(e) => {
+                println!("Failed to connect to wifi: {:?}", e);
+                embassy_time::Timer::after(embassy_time::Duration::from_millis(5000)).await
+            }
         }
     }
-    println!("Connected: {:?}", controller.is_connected());
 }
 
-pub fn create_interface(device: &mut esp_radio::wifi::WifiDevice) -> smoltcp::iface::Interface {
-    smoltcp::iface::Interface::new(
-        smoltcp::iface::Config::new(smoltcp::wire::HardwareAddress::Ethernet(
-            smoltcp::wire::EthernetAddress::from_bytes(&device.mac_address()),
-        )),
-        device,
-        timestamp(),
-    )
+#[embassy_executor::task]
+async fn net_task(mut runner: Runner<'static, WifiDevice<'static>>) {
+    runner.run().await
 }
 
-// some smoltcp boilerplate
-fn timestamp() -> smoltcp::time::Instant {
-    smoltcp::time::Instant::from_micros(
-        esp_hal::time::Instant::now()
-            .duration_since_epoch()
-            .as_micros() as i64,
-    )
-}
-
-fn obtain_ip(stack: &mut Stack<esp_radio::wifi::WifiDevice<'_>>) {
-    println!("Wait for IP address");
+async fn wait_for_connection(stack: embassy_net::Stack<'_>) {
+    println!("Waiting for link to be up");
     loop {
-        stack.work();
-        if stack.is_iface_up() {
-            println!("IP acquired: {:?}", stack.get_ip_info());
+        if stack.is_link_up() {
             break;
         }
+        embassy_time::Timer::after(embassy_time::Duration::from_millis(500)).await;
+    }
+
+    println!("Waiting to get IP address...");
+    loop {
+        if let Some(config) = stack.config_v4() {
+            println!("Got IP: {}", config.address);
+            break;
+        }
+        embassy_time::Timer::after(embassy_time::Duration::from_millis(500)).await;
     }
 }
 
 fn make_stack<'a>(
-    mut device: WifiDevice<'a>,
-    socket_set_entries: &'a mut [SocketStorage<'a>; 4]
-) -> Stack<'a, WifiDevice<'a>> {
-    let iface = create_interface(&mut device);
-    let mut socket_set = SocketSet::new( &mut socket_set_entries[..]);
-    let dhcp_socket = smoltcp::socket::dhcpv4::Socket::new();
-    socket_set.add(dhcp_socket);
-    let now_fn = || Instant::now().duration_since_epoch().as_millis();
+    device: WifiDevice<'a>
+) -> (embassy_net::Stack<'a>, Runner<'a, WifiDevice<'a>>) {
+    let rng = Rng::new();
+    let net_seed = rng.random() as u64 | ((rng.random() as u64) << 32);
+    let dhcp_config = DhcpConfig::default();
+    let config = embassy_net::Config::dhcpv4(dhcp_config);
 
-    Stack::new(
-        iface,
+    embassy_net::new(
         device,
-        socket_set,
-        now_fn,
-        Rng::new().random()
+        config,
+        mk_static!(StackResources<3>, StackResources::<3>::new()),
+        net_seed
     )
 }
 
