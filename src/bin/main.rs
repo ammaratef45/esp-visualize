@@ -16,23 +16,25 @@ use embedded_graphics::prelude::{Point, RgbColor};
 use embedded_graphics::text::{Alignment, Text};
 use embedded_graphics::Drawable;
 use esp_hal::clock::CpuClock;
-use esp_hal::delay::Delay;
 use esp_hal::dma::DmaDescriptor;
 use esp_hal::rng::Rng;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::Async;
 use esp_hal::peripherals::{Peripherals, TIMG0, WIFI};
-use esp_hal::time::{Duration, Instant, Rate};
+use esp_hal::time::Rate;
 use esp_hal::gpio::Pin;
 use esp_hub75::Color;
 use esp_hub75::{Hub75, Hub75Pins16, framebuffer::{compute_rows, compute_frame_count, plain::DmaFrameBuffer}};
 use embedded_graphics::mono_font::MonoTextStyleBuilder;
 use esp_radio::wifi::{self, ClientConfig, ModeConfig, ScanConfig, WifiController, WifiDevice, WifiEvent, WifiStaState};
 use esp_println::println;
-use smoltcp::wire::IpAddress;
-use embedded_io::{Read, Write};
-use embassy_net::{DhcpConfig, Runner, StackResources};
+use embassy_net::{
+    DhcpConfig, Runner, StackResources,
+    dns::DnsSocket,
+    tcp::client::{TcpClient, TcpClientState},
+};
 use embassy_executor::Spawner;
+use reqwless::client::{HttpClient, TlsConfig};
 
 const ROWS: usize = 32;
 const COLS: usize = 64;
@@ -81,17 +83,17 @@ async fn main(spawner: Spawner) -> ! {
         esp_radio::Controller<'static>,
         esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller")
     );
+    let rng = Rng::new();
+    let net_seed = rng.random() as u64 | ((rng.random() as u64) << 32);
+    let tls_seed = rng.random() as u64 | ((rng.random() as u64) << 32);
     let (controller, device) = init_wifi(wifi_peripheral, &radio);
-    let (stack, runner) = make_stack(device);
+    let (stack, runner) = make_stack(device, net_seed);
 
     spawner.spawn(connection(controller)).ok();
     spawner.spawn(net_task(runner)).ok();
 
     wait_for_connection(stack).await;
-    // let mut rx_buffer = [0u8; 1536];
-    // let mut tx_buffer = [0u8; 1536];
-    // let socket = stack.get_socket(&mut rx_buffer, &mut tx_buffer);
-    // http_request(socket);
+    access_website(stack, tls_seed).await;
 
     loop {
         matrix_display = matrix_display.draw("Hi Again!");
@@ -267,10 +269,8 @@ async fn wait_for_connection(stack: embassy_net::Stack<'_>) {
 }
 
 fn make_stack<'a>(
-    device: WifiDevice<'a>
+    device: WifiDevice<'a>, net_seed: u64
 ) -> (embassy_net::Stack<'a>, Runner<'a, WifiDevice<'a>>) {
-    let rng = Rng::new();
-    let net_seed = rng.random() as u64 | ((rng.random() as u64) << 32);
     let dhcp_config = DhcpConfig::default();
     let config = embassy_net::Config::dhcpv4(dhcp_config);
 
@@ -282,31 +282,34 @@ fn make_stack<'a>(
     )
 }
 
-fn http_request(mut socket: blocking_network_stack::Socket<'_, '_, esp_radio::wifi::WifiDevice<'_>>) {
-    println!("Starting HTTP client loop");
-    let delay = Delay::new();
-    println!("Making HTTP request");
-    socket.work();
-    let remote_addr = IpAddress::v4(142, 250, 185, 115);
-    socket.open(remote_addr, 80).unwrap();
-    socket.write(b"GET / HTTP/1.0\r\nHost: www.mobile-j.de\r\n\r\n").unwrap();
-    socket.flush().unwrap();
-    let deadline = Instant::now() + Duration::from_secs(20);
-    let mut buffer = [0u8; 512];
-    while let Ok(len) = socket.read(&mut buffer) {
-        let Ok(text) = core::str::from_utf8(&buffer[..len]) else {
-            panic!("Invalid UTF-8 sequence encountered");
-        };
-        println!("{}", text);
-        if Instant::now() > deadline {
-            println!("Timeout");
-            break;
-        }
-    }
-    socket.disconnect();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline {
-        socket.work();
-    }
-    delay.delay_millis(1000);
+async fn access_website(stack: embassy_net::Stack<'_>, tls_seed: u64) {
+    let mut rx_buffer = [0; 4096];
+    let mut tx_buffer = [0; 4096];
+    let dns = DnsSocket::new(stack);
+    let tcp_state = TcpClientState::<1, 4096, 4096>::new();
+    let tcp = TcpClient::new(stack, &tcp_state);
+
+    let tls = TlsConfig::new(
+        tls_seed,
+        &mut rx_buffer,
+        &mut tx_buffer,
+        reqwless::client::TlsVerify::None,
+    );
+
+    let mut client = HttpClient::new_with_tls(&tcp, &dns, tls);
+    let mut buffer = [0u8; 4096];
+    let mut http_req = client
+        .request(
+            reqwless::request::Method::GET,
+            "https://jsonplaceholder.typicode.com/posts/1",
+        )
+        .await
+        .unwrap();
+    let response = http_req.send(&mut buffer).await.unwrap();
+
+    println!("Got response");
+    let res = response.body().read_to_end().await.unwrap();
+
+    let content = core::str::from_utf8(res).unwrap();
+    println!("{}", content);
 }
