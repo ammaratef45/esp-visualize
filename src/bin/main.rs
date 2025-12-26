@@ -6,6 +6,7 @@
     holding buffers for the duration of a data transfer."
 )]
 #![deny(clippy::large_stack_frames)]
+#![feature(type_alias_impl_trait)]
 
 extern crate alloc;
 
@@ -56,6 +57,17 @@ esp_bootloader_esp_idf::esp_app_desc!();
     clippy::large_stack_frames,
     reason = "it's not unusual to allocate larger buffers etc. in main"
 )]
+
+macro_rules! mk_static {
+    ($t:ty,$val:expr) => {{
+        static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
+        #[deny(unused_attributes)]
+        let x = STATIC_CELL.uninit().write(($val));
+        x
+    }};
+}
+
+
 #[main]
 fn main() -> ! {
     let peripherals = init_hardware();
@@ -66,7 +78,10 @@ fn main() -> ! {
     let mut matrix_display = WaveShare64X32Display::new(hub75);
 
     esp_rtos::start(timg0.timer0);
-    let radio = esp_radio::init().expect("Failed to init radio");
+    let radio = &*mk_static!(
+        esp_radio::Controller<'static>,
+        esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller")
+    );
     let (mut controller, device) = init_wifi(wifi_peripheral, &radio);
     scan_wifi(&mut controller);
     connect_wifi(&mut controller);

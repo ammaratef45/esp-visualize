@@ -27,6 +27,7 @@ blocking-network-stack = { git = "https://github.com/bjoernQ/blocking-network-st
   "tcp",
 ] }
 embedded-io = "0.6.1"
+static_cell = "2.1.1"
 
 
 [profile.dev]
