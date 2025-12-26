@@ -16,12 +16,13 @@ use embedded_graphics::prelude::{Point, RgbColor};
 use embedded_graphics::text::{Alignment, Text};
 use embedded_graphics::Drawable;
 use esp_hal::clock::CpuClock;
+use esp_hal::delay::Delay;
 use esp_hal::dma::DmaDescriptor;
 use esp_hal::rng::Rng;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::{Async, main};
 use esp_hal::peripherals::{Peripherals, TIMG0, WIFI};
-use esp_hal::time::{Instant, Rate};
+use esp_hal::time::{Duration, Instant, Rate};
 use esp_hal::gpio::Pin;
 use esp_hub75::Color;
 use esp_hub75::{Hub75, Hub75Pins16, framebuffer::{compute_rows, compute_frame_count, plain::DmaFrameBuffer}};
@@ -29,6 +30,8 @@ use embedded_graphics::mono_font::MonoTextStyleBuilder;
 use esp_radio::wifi::{self, ClientConfig, ModeConfig, ScanConfig, WifiController, WifiDevice};
 use smoltcp::iface::{SocketSet, SocketStorage};
 use esp_println::println;
+use smoltcp::wire::IpAddress;
+use embedded_io::{Read, Write};
 
 const ROWS: usize = 32;
 const COLS: usize = 64;
@@ -70,6 +73,10 @@ fn main() -> ! {
     let mut socket_set_entries: [SocketStorage; 4] = Default::default();
     let mut stack = make_stack(device, &mut socket_set_entries);
     obtain_ip(&mut stack);
+    let mut rx_buffer = [0u8; 1536];
+    let mut tx_buffer = [0u8; 1536];
+    let socket = stack.get_socket(&mut rx_buffer, &mut tx_buffer);
+    http_request(socket);
 
     loop {
         matrix_display = matrix_display.draw("Hi Again!");
@@ -245,4 +252,33 @@ fn make_stack<'a>(
         now_fn,
         Rng::new().random()
     )
+}
+
+fn http_request(mut socket: blocking_network_stack::Socket<'_, '_, esp_radio::wifi::WifiDevice<'_>>) {
+    println!("Starting HTTP client loop");
+    let delay = Delay::new();
+    println!("Making HTTP request");
+    socket.work();
+    let remote_addr = IpAddress::v4(142, 250, 185, 115);
+    socket.open(remote_addr, 80).unwrap();
+    socket.write(b"GET / HTTP/1.0\r\nHost: www.mobile-j.de\r\n\r\n").unwrap();
+    socket.flush().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut buffer = [0u8; 512];
+    while let Ok(len) = socket.read(&mut buffer) {
+        let Ok(text) = core::str::from_utf8(&buffer[..len]) else {
+            panic!("Invalid UTF-8 sequence encountered");
+        };
+        println!("{}", text);
+        if Instant::now() > deadline {
+            println!("Timeout");
+            break;
+        }
+    }
+    socket.disconnect();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        socket.work();
+    }
+    delay.delay_millis(1000);
 }

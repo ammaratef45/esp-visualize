@@ -1031,6 +1031,7 @@ dependencies = [
  "blocking-network-stack",
  "critical-section",
  "embedded-graphics",
+ "embedded-io 0.6.1",
  "esp-alloc",
  "esp-bootloader-esp-idf",
  "esp-hal",
