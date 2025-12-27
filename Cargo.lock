@@ -992,6 +992,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "esp-visualize"
+version = "0.1.0"
+dependencies = [
+ "critical-section",
+ "embassy-executor",
+ "embassy-net",
+ "embassy-time",
+ "embedded-graphics",
+ "esp-alloc",
+ "esp-bootloader-esp-idf",
+ "esp-hal",
+ "esp-hub75",
+ "esp-println",
+ "esp-radio",
+ "esp-rtos",
+ "reqwless",
+ "smoltcp",
+ "static_cell",
+]
+
+[[package]]
 name = "esp-wifi-sys"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1412,27 +1433,6 @@ name = "micromath"
 version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3c8dda44ff03a2f238717214da50f65d5a53b45cd213a7370424ffdb6fae815"
-
-[[package]]
-name = "my-esp-project"
-version = "0.1.0"
-dependencies = [
- "critical-section",
- "embassy-executor",
- "embassy-net",
- "embassy-time",
- "embedded-graphics",
- "esp-alloc",
- "esp-bootloader-esp-idf",
- "esp-hal",
- "esp-hub75",
- "esp-println",
- "esp-radio",
- "esp-rtos",
- "reqwless",
- "smoltcp",
- "static_cell",
-]
 
 [[package]]
 name = "nb"
