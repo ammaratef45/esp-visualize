@@ -17,6 +17,7 @@ use embedded_graphics::{
     mono_font::MonoTextStyleBuilder
 };
 
+const EMPTY_LINE: &str = "                                                ";
 const ROWS: usize = 32;
 const COLS: usize = 64;
 const BITS: u8 = 4;
@@ -81,7 +82,7 @@ impl<'a> WaveShare64X32Display<'a> {
         }
     }
 
-    pub fn draw(mut self, text: &str) -> Self {
+    fn _draw(mut self, text: &str) -> Self {
         let font = FONT_4X6;
         let text_style = MonoTextStyleBuilder::new()
             .font(&font)
@@ -100,5 +101,10 @@ impl<'a> WaveShare64X32Display<'a> {
         self.hub75 = new_hub75;
         result.expect("transfer failed");
         self
+    }
+
+    pub fn draw(self, text: &str) -> Self {
+        let res = self._draw(EMPTY_LINE);
+        res._draw(text)
     }
 }
